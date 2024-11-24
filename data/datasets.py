@@ -1,6 +1,8 @@
 import os
 import random
-
+from PIL import Image
+import numpy as np
+import torch
 from torch.utils.data import Dataset
 from data.utils import _load3d, _crop_and_pad, _normalise_intensity, _to_tensor, _load2d, _magic_slicer
 
@@ -116,3 +118,89 @@ class CardiacMR2D(_BaseDataset):
         data_dict = _crop_and_pad(data_dict, self.crop_size)
         data_dict = _normalise_intensity(data_dict, self.img_keys)
         return _to_tensor(data_dict)
+    
+
+
+class LumireDataset(Dataset):
+    def __init__(self,
+                 data_dir_path,
+                 evaluate=False,
+                 slice_range=None,
+                 slicing=None,
+                 crop_size=(256, 256),
+                 ):
+        """
+        Initialize the LumireDataset.
+
+        Args:
+            data_dir_path (str): Path to the directory containing all samples.
+            evaluate (bool): Flag to indicate evaluation mode.
+            slice_range (tuple, optional): Range for slicing the data.
+            slicing (callable, optional): Slicing function.
+            crop_size (tuple): Desired crop size for images.
+        """
+        super(LumireDataset, self).__init__()
+        self.evaluate = evaluate
+        self.crop_size = crop_size
+        self.img_keys = ['target', 'source']
+        
+        # Load the list of sample paths
+        # Ensure that 'all_samples_full.pt' contains a list of file paths
+        self.all_samples = torch.load(os.path.join(data_dir_path, 'all_samples_full.pt'))
+        
+        if not isinstance(self.all_samples, list):
+            raise ValueError("all_samples_full.pt should contain a list of file paths.")
+        
+        self.pairs = []
+        self.shuffle_pairs()  # Initialize pairs
+
+    def shuffle_pairs(self):
+        """
+        Shuffle the samples and create pairs for the current epoch.
+        """
+        shuffled = self.all_samples.copy()
+        np.random.shuffle(shuffled)
+        
+        # If the number of samples is odd, drop the last sample
+        if len(shuffled) % 2 != 0:
+            print("Odd number of samples, dropping the last one to form pairs.")
+            shuffled = shuffled[:-1]
+        
+        self.pairs = [(shuffled[i], shuffled[i + 1]) for i in range(0, len(shuffled), 2)]
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, index):
+        """
+        Retrieve a pair of images and process them.
+
+        Args:
+            index (int): Index of the pair.
+
+        Returns:
+            dict: Dictionary containing 'target' and 'source' tensors.
+        """
+        target_pth, source_pth = self.pairs[index]
+        
+        # Load and convert images to grayscale
+        target_image = np.asarray(Image.open(target_pth).convert('L'))
+        source_image = np.asarray(Image.open(source_pth).convert('L'))
+        
+
+        data_dict = {'target': target_image, 'source': source_image}
+        
+        # Normalize and convert to tensors
+        data_dict = _normalise_intensity(data_dict, self.img_keys)
+        data_dict = _to_tensor(data_dict)
+        
+        return data_dict
+
+
+    def on_epoch_start(self):
+        """
+        Reshuffle pairs at the start of each epoch.
+        """
+        self.shuffle_pairs()
+
+
